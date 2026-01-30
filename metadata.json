@@ -1,0 +1,7 @@
+{
+  "name": "AgriSense: Smart Soil & Tank Monitor",
+  "description": "An interactive dashboard for South Indian agriculture connecting to ESP32 sensors for NPK and fertilizer tank monitoring, featuring an intelligent ratio calculator and crop guides.",
+  "requestFramePermissions": [
+    "serial"
+  ]
+}
