@@ -14,11 +14,11 @@ import { DataService } from '../services/data.service';
           <p class="opacity-80">Real-time telemetry from fermentation unit</p>
           
           <div class="mt-4 flex gap-2">
-            @if (dataService.isSerialConnected()) {
+            @if (dataService.isTankConnected()) {
               <div class="bg-white/20 backdrop-blur-md px-3 py-1 rounded-full text-sm font-semibold flex items-center gap-2 border border-white/10">
-                <span class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span> USB Connected
+                <span class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span> Tank USB Connected
               </div>
-            } @else if (dataService.isConnected()) {
+            } @else if (dataService.isDemoMode()) {
               <div class="bg-white/20 backdrop-blur-md px-3 py-1 rounded-full text-sm font-semibold flex items-center gap-2 border border-white/10">
                 <span class="w-2 h-2 bg-yellow-400 rounded-full"></span> Simulated Data
               </div>
@@ -31,13 +31,20 @@ import { DataService } from '../services/data.service';
         </div>
 
         <div>
-          @if (!dataService.isSerialConnected()) {
-            <button (click)="connectUsb()" class="bg-white text-teal-800 hover:bg-teal-50 px-6 py-2 rounded-xl font-bold transition-colors flex items-center gap-2 shadow-lg">
-              <span>🔌</span> Connect Arduino USB
-            </button>
+          @if (!dataService.isTankConnected()) {
+             <div class="flex gap-2">
+               @if(!dataService.isDemoMode()) {
+                <button (click)="dataService.simulateConnection()" class="bg-teal-900/50 hover:bg-teal-900/70 border border-teal-600 text-white px-4 py-2 rounded-xl font-bold transition-colors text-sm">
+                    Run Demo Mode
+                </button>
+               }
+               <button (click)="connectUsb()" class="bg-white text-teal-800 hover:bg-teal-50 px-6 py-2 rounded-xl font-bold transition-colors flex items-center gap-2 shadow-lg">
+                 <span>🔌</span> Connect Tank USB
+               </button>
+             </div>
           } @else {
              <div class="text-right opacity-70 text-sm">
-               Reading stream...<br>
+               Reading Tank Stream...<br>
                Baud: 9600
              </div>
           }
@@ -103,14 +110,14 @@ import { DataService } from '../services/data.service';
         <h3 class="font-bold text-stone-700 mb-2">System Health</h3>
         <div class="flex items-center gap-2">
            <div class="w-3 h-3 rounded-full animate-pulse" 
-             [class.bg-green-500]="dataService.isSerialConnected() || dataService.isConnected()"
-             [class.bg-red-500]="!dataService.isSerialConnected() && !dataService.isConnected()">
+             [class.bg-green-500]="dataService.isTankConnected() || dataService.isDemoMode()"
+             [class.bg-red-500]="!dataService.isTankConnected() && !dataService.isDemoMode()">
            </div>
            <span class="text-sm text-stone-500">
-             @if(dataService.isSerialConnected()) {
-               Live data stream active via Serial Port (USB)
-             } @else if (dataService.isConnected()) {
-               Simulation Mode (NPK Connected)
+             @if(dataService.isTankConnected()) {
+               Live data stream active via Tank Serial Port (USB)
+             } @else if (dataService.isDemoMode()) {
+               Simulation Mode
              } @else {
                Waiting for connection...
              }
@@ -130,6 +137,6 @@ export class TankMonitorComponent {
   }
 
   async connectUsb() {
-    await this.dataService.connectSerial();
+    await this.dataService.connectTank();
   }
 }

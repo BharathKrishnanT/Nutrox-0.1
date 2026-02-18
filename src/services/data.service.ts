@@ -61,18 +61,42 @@ export class DataService {
   currentTab = signal<Tab>('readings');
 
   // --- Hardware State ---
-  isConnected = signal<boolean>(false); // Mock NPK connection
-  isSerialConnected = signal<boolean>(false); // Real Arduino Serial connection
+  // Replaced generic isSerialConnected with specific port states
+  isNpkConnected = signal<boolean>(false);
+  isTankConnected = signal<boolean>(false);
+  isDemoMode = signal<boolean>(false); // Simulation Mode
+  
+  // Computed helper for UI to know if ANY real device is connected
+  anySerialConnected = computed(() => this.isNpkConnected() || this.isTankConnected());
+
+  // Debug Log
+  lastCommand = signal<string>('');
   
   npkReadings = signal<NpkData>({ n: 0, p: 0, k: 0, timestamp: null });
   tankReadings = signal<TankData>({ methane: 0, temperature: 0, humidity: 0, ph: 7.0 });
 
-  // --- Relay State ---
-  relay1State = signal<boolean>(false);
-  relay2State = signal<boolean>(false);
+  // --- Relay & Motor State ---
+  relay1State = signal<boolean>(false); // Heater (Relay Pin 4)
+  relay2State = signal<boolean>(false); // Grinder (Motor A)
+  relay3State = signal<boolean>(false); // Agitator (Motor B)
 
-  private writer: WritableStreamDefaultWriter<string> | null = null;
-  private port: any = null;
+  grinderSpeed = signal<number>(255); // Motor A
+  agitatorSpeed = signal<number>(255); // Motor B
+  
+  grinderDirection = signal<'F' | 'B'>('F'); // Motor A
+  agitatorDirection = signal<'F' | 'B'>('F'); // Motor B
+
+  // --- Serial Ports ---
+  private npkPort: any = null;
+  private tankPort: any = null;
+  private npkWriter: WritableStreamDefaultWriter<string> | null = null;
+  private tankWriter: WritableStreamDefaultWriter<string> | null = null;
+  
+  // Buffer for multi-line NPK readings
+  private partialNpk: { n: number | null, p: number | null, k: number | null } = { n: null, p: null, k: null };
+  
+  // Track last real update for Hybrid Mode
+  private lastTankUpdate = 0;
 
   // --- Database ---
   readonly soils: SoilType[] = [
@@ -207,105 +231,222 @@ export class DataService {
 
   readonly organicAdditives: OrganicAdditive[] = [
     { id: 'reset', name: 'Cow Dung Base', boosts: 'Balanced Starter', description: 'This is the foundational compost starter, rich in organic matter and beneficial microbes.', nutrientBoost: {} },
-    { id: 'oil-cake', name: 'Add Crop Waste / Oil Cake', boosts: 'Nitrogen (N)', description: 'Mixing in crop waste or oil cakes creates a nitrogen-rich fertilizer, perfect for promoting leafy green growth.', nutrientBoost: { "N": 3 } },
-    { id: 'bone-meal', name: 'Add Bone Meal / Ash', boosts: 'Phosphorus (P)', description: 'Adding bone meal or ash from cattle waste significantly increases phosphorus, vital for strong root development.', nutrientBoost: { "P": 3 } },
-    { id: 'wood-ash', name: 'Add Wood Ash', boosts: 'Potassium (K)', description: 'Combining with wood ash makes a potassium-rich liquid fertilizer, excellent for improving fruit quality.', nutrientBoost: { "K": 3 } },
-    { id: 'eggshells', name: 'Add Eggshells / Lime', boosts: 'Calcium (Ca)', description: 'Crushed eggshells or agricultural lime are fantastic calcium sources, essential for building strong cell walls.', nutrientBoost: { "Ca": 3 } },
-    { id: 'gypsum', name: 'Add Gypsum', boosts: 'Sulphur (S)', description: 'Gypsum is an excellent source of sulphur, a key component of amino acids and vitamins.', nutrientBoost: { "S": 3 } },
-    { id: 'epsom-salt', name: 'Add Epsom Salt', boosts: 'Magnesium (Mg)', description: 'Epsom salt (Magnesium Sulphate) provides a readily available source of magnesium, crucial for photosynthesis.', nutrientBoost: { "Mg": 3 } },
-    { id: 'vermicompost', name: 'Add Vermicompost', boosts: 'All-Round Booster', description: 'Mixing in vermicompost supercharges the base with a wide array of micronutrients and growth hormones.', nutrientBoost: { "N": 2, "P": 2, "K": 2, "Ca": 2, "S": 2, "Mg": 2 } }
+    { id: 'oil-cake', name: 'Oil Cake / Neem', boosts: 'Nitrogen (N)', description: 'Mixing in crop waste or oil cakes creates a nitrogen-rich fertilizer, perfect for promoting leafy green growth.', nutrientBoost: { "N": 3 } },
+    { id: 'bone-meal', name: 'Bone Meal / Rock Phos', boosts: 'Phosphorus (P)', description: 'Adding bone meal or ash from cattle waste significantly increases phosphorus, vital for strong root development.', nutrientBoost: { "P": 3 } },
+    { id: 'wood-ash', name: 'Wood Ash', boosts: 'Potassium (K)', description: 'Combining with wood ash makes a potassium-rich liquid fertilizer, excellent for improving fruit quality.', nutrientBoost: { "K": 3 } },
+    { id: 'eggshells', name: 'Eggshells / Lime', boosts: 'Calcium (Ca)', description: 'Crushed eggshells or agricultural lime are fantastic calcium sources, essential for building strong cell walls.', nutrientBoost: { "Ca": 3 } },
+    { id: 'gypsum', name: 'Gypsum', boosts: 'Sulphur (S)', description: 'Gypsum is an excellent source of sulphur, a key component of amino acids and vitamins.', nutrientBoost: { "S": 3 } },
+    { id: 'epsom-salt', name: 'Epsom Salt', boosts: 'Magnesium (Mg)', description: 'Epsom salt (Magnesium Sulphate) provides a readily available source of magnesium, crucial for photosynthesis.', nutrientBoost: { "Mg": 3 } },
+    { id: 'vermicompost', name: 'Vermicompost', boosts: 'All-Round Booster', description: 'Mixing in vermicompost supercharges the base with a wide array of micronutrients and growth hormones.', nutrientBoost: { "N": 2, "P": 2, "K": 2, "Ca": 2, "S": 2, "Mg": 2 } }
   ];
 
   readonly organicBaseProfile = { "N": 1, "P": 1, "K": 1, "Ca": 1, "S": 1, "Mg": 1 };
 
   // --- Context State ---
   selectedCrop = signal<Crop | null>(null);
+  detectedDeficiencies = signal<string[]>([]); // Populated by Plant AI
 
   constructor() {
     this.startTankMonitoring();
+    
+    // Listen for physical device disconnection
+    if (typeof navigator !== 'undefined' && 'serial' in navigator) {
+      (navigator as any).serial.addEventListener('disconnect', (event: any) => {
+        if (event.target === this.npkPort) {
+           console.log('NPK Device disconnected.');
+           this.disconnectNpk();
+        } else if (event.target === this.tankPort) {
+           console.log('Tank Device disconnected.');
+           this.disconnectTank();
+        }
+      });
+    }
   }
 
   // --- Actions ---
 
-  async connectToDevice(): Promise<boolean> {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        this.isConnected.set(true);
-        resolve(true);
-      }, 1500);
-    });
+  // Connect via Web Serial for NPK
+  async connectToNpkDevice(): Promise<boolean> {
+    await this.connectNpk();
+    return this.isNpkConnected();
+  }
+  
+  // Enable Demo Mode (Simulation without USB)
+  simulateConnection() {
+    this.disconnectNpk();
+    this.disconnectTank();
+    this.isDemoMode.set(true);
+    this.lastCommand.set('DEMO MODE: Connection Simulated');
   }
 
+  // Read NPK: Uses Serial if connected, otherwise uses mock
   async readNPK(): Promise<void> {
-    if (!this.isConnected()) return;
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        this.npkReadings.set({
-          n: Math.floor(Math.random() * (200 - 20) + 20),
-          p: Math.floor(Math.random() * (100 - 10) + 10),
-          k: Math.floor(Math.random() * (300 - 50) + 50),
-          timestamp: new Date()
-        });
-        resolve();
-      }, 800);
-    });
-  }
-
-  // --- Web Serial for Tank Monitor & Motor Control ---
-  async connectSerial() {
-    if (!('serial' in navigator)) {
-      alert('Web Serial API not supported. Please use Chrome or Edge.');
-      return;
-    }
-
-    try {
-      this.port = await (navigator as any).serial.requestPort();
-      await this.port.open({ baudRate: 9600 });
-      
-      this.isSerialConnected.set(true);
-
-      // Setup Writer for sending commands to Arduino
-      const textEncoder = new TextEncoderStream();
-      textEncoder.readable.pipeTo(this.port.writable);
-      this.writer = textEncoder.writable.getWriter();
-
-      // Start Reading loop
-      this.readSerialLoop(this.port);
-    } catch (error: any) {
-      // Handle user cancellation gracefully
-      if (error.name === 'NotFoundError' || error.toString().includes('No port selected')) {
-        console.warn('User cancelled port selection.');
-        return;
+    if (this.isNpkConnected() && this.npkWriter) {
+      // Send Request Command to NPK Port
+      try {
+        await this.npkWriter.write('READ_NPK\n');
+        this.lastCommand.set('Sent to NPK: READ_NPK');
+      } catch (e) {
+        console.error('Failed to send NPK read command', e);
       }
-      console.error('Serial Connection Error:', error);
-      this.handleDisconnect();
+    } else if (this.isDemoMode()) {
+      // Fallback: Simulated Data
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          this.npkReadings.set({
+            n: Math.floor(Math.random() * (200 - 20) + 20),
+            p: Math.floor(Math.random() * (100 - 10) + 10),
+            k: Math.floor(Math.random() * (300 - 50) + 50),
+            timestamp: new Date()
+          });
+          resolve();
+        }, 800);
+      });
     }
   }
 
-  async toggleRelay(motorId: 1 | 2, state: boolean) {
-    if (!this.writer || !this.isSerialConnected()) {
-      console.warn('Serial writer not available');
-      return;
-    }
+  // --- Web Serial Connection Logic ---
+  
+  async connectNpk() {
+    if (!('serial' in navigator)) { alert('Web Serial API not supported.'); return; }
+    if (this.isNpkConnected()) return;
 
     try {
-      // Protocol Matches Arduino: "R1ON", "R1OFF", "R2ON", "R2OFF"
-      const cmdPrefix = motorId === 1 ? 'R1' : 'R2';
-      const cmdSuffix = state ? 'ON' : 'OFF';
-      const command = `${cmdPrefix}${cmdSuffix}\n`;
+      // Request Port for NPK
+      this.npkPort = await (navigator as any).serial.requestPort();
+      await this.npkPort.open({ baudRate: 9600 });
       
-      await this.writer.write(command);
-      
-      // Optimistic UI update
-      if (motorId === 1) this.relay1State.set(state);
-      else this.relay2State.set(state);
-    } catch (err) {
-      console.error('Failed to write to serial:', err);
-      this.handleDisconnect();
+      this.isNpkConnected.set(true);
+      this.isDemoMode.set(false);
+      this.lastCommand.set('NPK Serial Connected (9600)');
+
+      const textEncoder = new TextEncoderStream();
+      textEncoder.readable.pipeTo(this.npkPort.writable);
+      this.npkWriter = textEncoder.writable.getWriter();
+
+      this.readLoop(this.npkPort, 'NPK');
+    } catch (error: any) {
+      const errStr = String(error);
+      if (errStr.includes('permissions policy') || errStr.includes('Access')) {
+         alert('Access Denied: Serial Port permission is blocked by browser policy. Ensure the app is running in a secure context (HTTPS) and permissions are granted in metadata.');
+      } else if (errStr.includes('Failed to open') || errStr.includes('NetworkError')) {
+         alert('Connection Failed: The Serial Port is busy or cannot be opened. Please close any other applications (like Arduino IDE) utilizing this port and try again.');
+      }
+      if (!errStr.includes('No port selected')) console.error('NPK Connection Error:', error);
+      this.disconnectNpk();
     }
   }
 
-  private async readSerialLoop(port: any) {
+  async connectTank() {
+    if (!('serial' in navigator)) { alert('Web Serial API not supported.'); return; }
+    if (this.isTankConnected()) return;
+
+    try {
+      // Request Port for Tank
+      this.tankPort = await (navigator as any).serial.requestPort();
+      await this.tankPort.open({ baudRate: 9600 });
+      
+      this.isTankConnected.set(true);
+      this.isDemoMode.set(false);
+      this.lastCommand.set('Tank Serial Connected (9600)');
+
+      const textEncoder = new TextEncoderStream();
+      textEncoder.readable.pipeTo(this.tankPort.writable);
+      this.tankWriter = textEncoder.writable.getWriter();
+
+      this.readLoop(this.tankPort, 'TANK');
+    } catch (error: any) {
+      const errStr = String(error);
+      if (errStr.includes('permissions policy') || errStr.includes('Access')) {
+         alert('Access Denied: Serial Port permission is blocked by browser policy. Ensure the app is running in a secure context (HTTPS) and permissions are granted in metadata.');
+      } else if (errStr.includes('Failed to open') || errStr.includes('NetworkError')) {
+         alert('Connection Failed: The Serial Port is busy or cannot be opened. Please close any other applications (like Arduino IDE) utilizing this port and try again.');
+      }
+      if (!errStr.includes('No port selected')) console.error('Tank Connection Error:', error);
+      this.disconnectTank();
+    }
+  }
+
+  // Set Motor Direction ('F' or 'B')
+  async setDirection(id: 2 | 3, dir: 'F' | 'B') {
+    if (id === 2) this.grinderDirection.set(dir);
+    if (id === 3) this.agitatorDirection.set(dir);
+    
+    // Log simulation
+    const name = id === 2 ? 'Grinder' : 'Agitator';
+    this.lastCommand.set(`Prepared: ${name} Direction -> ${dir}`);
+
+    // If currently running, update the motor immediately
+    const isRunning = id === 2 ? this.relay2State() : this.relay3State();
+    
+    if (isRunning) {
+        this.sendMotorCommand(id, true);
+    }
+  }
+
+  // Toggle Relay or Motor State based on Arduino Protocol
+  async toggleRelay(id: 1 | 2 | 3, state: boolean) {
+    // UI Update immediately for responsiveness (Optimistic)
+    if (id === 1) this.relay1State.set(state);
+    if (id === 2) this.relay2State.set(state);
+    if (id === 3) this.relay3State.set(state);
+    
+    if (id === 1) {
+         this.sendRelayCommand(id, state);
+    } else {
+         this.sendMotorCommand(id, state);
+    }
+  }
+
+  // Set Motor Speed dynamically (Only affects if motor is running)
+  async setMotorSpeed(id: 2 | 3, speed: number) {
+    const safeSpeed = Math.floor(speed);
+
+    // Update local state signal
+    if (id === 2) this.grinderSpeed.set(safeSpeed);
+    if (id === 3) this.agitatorSpeed.set(safeSpeed);
+    
+    const name = id === 2 ? 'Grinder' : 'Agitator';
+    // Only send command if running
+    const isRunning = id === 2 ? this.relay2State() : this.relay3State();
+    
+    if (isRunning) {
+       this.sendMotorCommand(id, true);
+    } else {
+       this.lastCommand.set(`Prepared: ${name} Speed -> ${safeSpeed} (Wait for Start)`);
+    }
+  }
+  
+  private async sendRelayCommand(id: number, state: boolean) {
+      const command = `RELAY:${state ? 1 : 0}\n`;
+      this.lastCommand.set(`Sent Tank: ${command.trim()}`);
+      
+      if (this.isTankConnected() && this.tankWriter) {
+          try {
+             await this.tankWriter.write(command);
+          } catch(e) { console.error(e); this.disconnectTank(); }
+      }
+  }
+  
+  private async sendMotorCommand(id: 2 | 3, state: boolean) {
+      const speed = Math.floor(id === 2 ? this.grinderSpeed() : this.agitatorSpeed());
+      const dir = id === 2 ? this.grinderDirection() : this.agitatorDirection();
+      const motorChar = id === 2 ? 'A' : 'B';
+      
+      // If turning ON, use current direction (F/B). If OFF, use 'S'.
+      const mode = state ? dir : 'S'; 
+      const command = `MOTOR:${motorChar}:${mode}:${state ? speed : 0}\n`;
+      
+      this.lastCommand.set(`Sent Tank: ${command.trim()}`);
+
+      if (this.isTankConnected() && this.tankWriter) {
+          try {
+             await this.tankWriter.write(command);
+          } catch(e) { console.error(e); this.disconnectTank(); }
+      }
+  }
+
+  private async readLoop(port: any, type: 'NPK' | 'TANK') {
     const textDecoder = new TextDecoderStream();
     const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
     const reader = textDecoder.readable.getReader();
@@ -320,71 +461,190 @@ export class DataService {
           buffer += value;
           const lines = buffer.split('\n');
           for (let i = 0; i < lines.length - 1; i++) {
-             this.parseSerialData(lines[i]);
+             this.parseSerialData(lines[i], type);
           }
           buffer = lines[lines.length - 1];
         }
       }
-    } catch (error) {
-      console.error('Serial Read Error:', error);
+    } catch (error: any) {
+      // Gracefully handle 'The device has been lost' and other disconnect errors
+      if (String(error).includes('lost') || error.name === 'NetworkError' || error.name === 'DisconnectError') {
+        console.warn(`${type} Serial Device Disconnected:`, error.message);
+      } else {
+        console.error(`${type} Serial Read Error:`, error);
+      }
     } finally {
-      reader.releaseLock();
-      this.handleDisconnect();
+      // Release locks and wait for stream to close
+      try { reader.releaseLock(); } catch (e) { /* ignore */ }
+      try { await readableStreamClosed.catch(() => {}); } catch(e) { /* ignore */ }
+
+      if (type === 'NPK') this.disconnectNpk();
+      else this.disconnectTank();
     }
   }
 
-  private handleDisconnect() {
-    console.log('Cleaning up connection...');
-    this.isSerialConnected.set(false);
-    this.writer = null;
-    this.port = null;
-    // Reset relays to safety state (UI only)
-    this.relay1State.set(false);
-    this.relay2State.set(false);
+  private async disconnectNpk() {
+    console.log('Cleaning up NPK connection...');
+    if (this.npkWriter) {
+      try { await this.npkWriter.releaseLock(); } catch (e) {}
+      this.npkWriter = null;
+    }
+    if (this.npkPort) {
+        try { await this.npkPort.close(); } catch(e) {}
+        this.npkPort = null;
+    }
+    this.isNpkConnected.set(false);
   }
 
-  private parseSerialData(line: string) {
+  private async disconnectTank() {
+    console.log('Cleaning up Tank connection...');
+    if (this.tankWriter) {
+      try { await this.tankWriter.releaseLock(); } catch (e) {}
+      this.tankWriter = null;
+    }
+    if (this.tankPort) {
+        try { await this.tankPort.close(); } catch(e) {}
+        this.tankPort = null;
+    }
+    this.isTankConnected.set(false);
+    
+    // Reset Motor UI State
+    this.relay1State.set(false);
+    this.relay2State.set(false);
+    this.relay3State.set(false);
+  }
+
+  private parseSerialData(line: string, source: 'NPK' | 'TANK') {
     const text = line.trim();
     if (!text) return;
-
-    // Arduino Format: "Temp: 25.00 °C | Humidity: 60.00 % | MQ4 Analog: 300 | MQ4 Digital: 0"
     
-    // We can match loosely to be safe against spaces/units
-    const tempMatch = text.match(/Temp:\s*([\d.]+)/);
-    const humMatch = text.match(/Humidity:\s*([\d.]+)/);
-    const gasMatch = text.match(/MQ4 Analog:\s*(\d+)/);
+    console.log(`[${source}] RX:`, text);
 
-    if (tempMatch && humMatch && gasMatch) {
-      const temperature = parseFloat(tempMatch[1]);
-      const humidity = parseFloat(humMatch[1]);
-      const methane = parseInt(gasMatch[1], 10);
+    // 1. Try Strict Match for format: "N:10,P:20,K:30" (matches ESP32 code)
+    const combinedMatch = text.match(/N:(\d+),P:(\d+),K:(\d+)/i);
+    if (combinedMatch) {
+       this.npkReadings.set({
+         n: parseInt(combinedMatch[1], 10),
+         p: parseInt(combinedMatch[2], 10),
+         k: parseInt(combinedMatch[3], 10),
+         timestamp: new Date()
+       });
+       return;
+    }
 
-      this.tankReadings.update(current => ({
-        ...current,
-        temperature: !isNaN(temperature) ? temperature : current.temperature,
-        humidity: !isNaN(humidity) ? humidity : current.humidity,
-        methane: !isNaN(methane) ? methane : current.methane
-        // pH is still simulated as it's not in the Arduino sketch provided
-      }));
+    // 2. Try JSON Parsing (Strict)
+    // Expected JSON: {"t":25.0,"h":60.0,"g":300,"a":0, "n": 40, "p": 30, "k": 50}
+    if (text.startsWith('{') && text.endsWith('}')) {
+      try {
+        const data = JSON.parse(text);
+        
+        // --- NPK Sensor Data ---
+        // Accepts NPK from either source if present
+        if (data.n !== undefined && data.p !== undefined && data.k !== undefined) {
+           this.npkReadings.set({
+             n: Number(data.n),
+             p: Number(data.p),
+             k: Number(data.k),
+             timestamp: new Date()
+           });
+        }
+
+        // --- Tank Sensor Data ---
+        // Primarily expects tank data from TANK source, but allows from either if available
+        if (data.t !== undefined || data.h !== undefined || data.g !== undefined) {
+           this.lastTankUpdate = Date.now();
+           this.tankReadings.update(current => ({
+            ...current,
+            temperature: typeof data.t === 'number' ? data.t : current.temperature,
+            humidity: typeof data.h === 'number' ? data.h : current.humidity,
+            methane: typeof data.g === 'number' ? data.g : current.methane,
+            ph: typeof data.ph === 'number' ? data.ph : current.ph,
+          }));
+        }
+        return; // Success
+      } catch (e) {
+        console.debug('JSON parse failed, trying regex fallback');
+      }
+    }
+
+    // 3. Try CSV (comma separated values: "10,20,30" for N,P,K)
+    const csvMatch = text.match(/^(\d+)\s*,\s*(\d+)\s*,\s*(\d+)$/);
+    if (csvMatch) {
+       this.npkReadings.set({
+         n: parseInt(csvMatch[1], 10),
+         p: parseInt(csvMatch[2], 10),
+         k: parseInt(csvMatch[3], 10),
+         timestamp: new Date()
+       });
+       return;
+    }
+
+    // 4. Try Text Protocol for Tank
+    let tankUpdated = false;
+    const tempMatch = text.match(/(?:T|Temp)[:=\s]*([\d\.]+)/i);
+    const humMatch = text.match(/(?:H|Hum)[:=\s]*([\d\.]+)/i);
+    const gasMatch = text.match(/(?:G|Gas|Methane)[:=\s]*([\d\.]+)/i);
+    const phMatch = text.match(/(?:pH)[:=\s]*([\d\.]+)/i);
+
+    if (tempMatch || humMatch || gasMatch || phMatch) {
+       this.lastTankUpdate = Date.now();
+       this.tankReadings.update(current => ({
+         ...current,
+         temperature: tempMatch ? parseFloat(tempMatch[1]) : current.temperature,
+         humidity: humMatch ? parseFloat(humMatch[1]) : current.humidity,
+         methane: gasMatch ? parseFloat(gasMatch[1]) : current.methane,
+         ph: phMatch ? parseFloat(phMatch[1]) : current.ph
+       }));
+       tankUpdated = true;
+    }
+
+    if (tankUpdated) return;
+
+    // 5. Try Multi-line Accumulation Regex for NPK
+    const nMatch = text.match(/(?:N|Nitrogen)[:=\s]*(\d+)/i);
+    if (nMatch) this.partialNpk.n = parseInt(nMatch[1], 10);
+
+    const pMatch = text.match(/(?:P|Phosphorus)[:=\s]*(\d+)/i);
+    if (pMatch) this.partialNpk.p = parseInt(pMatch[1], 10);
+
+    const kMatch = text.match(/(?:K|Potassium)[:=\s]*(\d+)/i);
+    if (kMatch) this.partialNpk.k = parseInt(kMatch[1], 10);
+
+    // Check if partial buffer is complete
+    if (this.partialNpk.n !== null && this.partialNpk.p !== null && this.partialNpk.k !== null) {
+        this.npkReadings.set({
+            n: this.partialNpk.n,
+            p: this.partialNpk.p,
+            k: this.partialNpk.k,
+            timestamp: new Date()
+        });
+        // Reset buffer
+        this.partialNpk = { n: null, p: null, k: null };
     }
   }
 
   private startTankMonitoring() {
+    // Hybrid Simulation Loop
     setInterval(() => {
-      // Always simulate pH as per previous setup
+      // Simulate if:
+      // 1. In Demo Mode
+      // 2. Tank connected but no data for 5 seconds (Sensor fault simulation/keepalive)
+      
+      const shouldSimulate = 
+         this.isDemoMode() ||
+         (this.isTankConnected() && (Date.now() - this.lastTankUpdate > 5000));
+
+      if (!shouldSimulate) return;
+
       const newPh = parseFloat((Math.random() * (8.5 - 5.5) + 5.5).toFixed(2));
 
-      if (this.isSerialConnected()) {
-        this.tankReadings.update(curr => ({ ...curr, ph: newPh }));
-      } else if (this.isConnected()) {
-        // Full simulation if only NPK is 'connected' (demo mode)
-        this.tankReadings.set({
-          methane: parseFloat((Math.random() * (500 - 100) + 100).toFixed(1)),
-          temperature: parseFloat((Math.random() * (35 - 25) + 25).toFixed(1)),
-          humidity: parseFloat((Math.random() * (90 - 40) + 40).toFixed(1)),
-          ph: newPh
-        });
-      }
+      this.tankReadings.set({
+        methane: parseFloat((Math.random() * (500 - 100) + 100).toFixed(1)),
+        temperature: parseFloat((Math.random() * (35 - 25) + 25).toFixed(1)),
+        humidity: parseFloat((Math.random() * (90 - 40) + 40).toFixed(1)),
+        ph: newPh
+      });
+      
     }, 3000);
   }
 }

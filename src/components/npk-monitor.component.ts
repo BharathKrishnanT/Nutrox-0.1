@@ -15,8 +15,10 @@ declare var Chart: any;
         <div>
           <h2 class="text-2xl font-bold text-stone-800">NPK Sensor Status</h2>
           <p class="text-stone-500">
-            @if (dataService.isConnected()) {
-              <span class="text-green-600 font-semibold">● Connected to ESP32</span>
+            @if (dataService.isNpkConnected()) {
+              <span class="text-green-600 font-semibold">● Connected to NPK Sensor (USB)</span>
+            } @else if (dataService.isDemoMode()) {
+              <span class="text-yellow-600 font-semibold">● Simulated Connection</span>
             } @else {
               <span class="text-red-500 font-semibold">● Disconnected</span>
             }
@@ -24,10 +26,15 @@ declare var Chart: any;
         </div>
         
         <div class="flex gap-3">
-          @if (!dataService.isConnected()) {
+          @if (!dataService.isNpkConnected()) {
+            @if (!dataService.isDemoMode()) {
+               <button (click)="dataService.simulateConnection()" class="bg-stone-100 hover:bg-stone-200 text-stone-600 px-4 py-2 rounded-lg font-medium transition-colors text-sm">
+                  Demo Mode
+               </button>
+            }
             <button (click)="connect()" 
               class="bg-stone-800 hover:bg-stone-700 text-white px-6 py-2 rounded-lg font-medium transition-colors flex items-center gap-2">
-              <span class="text-xl">📡</span> Connect Device
+              <span class="text-xl">🔌</span> Connect NPK USB
             </button>
           } @else {
             <button (click)="readSensor()" 
@@ -89,7 +96,7 @@ declare var Chart: any;
         </div>
       } @else {
         <div class="text-center py-20 bg-stone-100 rounded-3xl border border-dashed border-stone-300">
-          <p class="text-stone-500 text-lg">No readings available. Connect device and click "Read".</p>
+          <p class="text-stone-500 text-lg">No readings available. Connect device or use Demo Mode.</p>
         </div>
       }
     </div>
@@ -113,13 +120,16 @@ export class NpkMonitorComponent {
   }
 
   async connect() {
-    await this.dataService.connectToDevice();
+    // Uses the NPK Serial Connection now
+    await this.dataService.connectNpk();
   }
 
   async readSensor() {
     this.isReading.set(true);
+    // Sends "READ_NPK" command to ESP32 via Serial
     await this.dataService.readNPK();
-    this.isReading.set(false);
+    // Simulate short delay for UX if data comes back instantly
+    setTimeout(() => this.isReading.set(false), 500);
   }
 
   getPercentage(val: number, max: number): number {

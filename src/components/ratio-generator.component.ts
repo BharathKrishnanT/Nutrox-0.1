@@ -1,22 +1,30 @@
 import { Component, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { DataService, Fertilizer } from '../services/data.service';
+import { DataService, OrganicAdditive } from '../services/data.service';
+
+interface RecipeItem {
+  name: string;
+  amount: number;
+  reason: string;
+  color: string;
+  percent: number;
+}
 
 @Component({
   selector: 'app-ratio-generator',
   standalone: true,
   imports: [CommonModule],
   template: `
-    <div class="max-w-4xl mx-auto">
+    <div class="max-w-5xl mx-auto">
       <header class="mb-8">
         <h2 class="text-3xl font-bold text-[#6A5A4F] mb-2">Organic Mix Calculator</h2>
-        <p class="text-stone-600">Generates a custom fertilizer recipe based on your soil's latest NPK readings.</p>
+        <p class="text-stone-600">Generates a custom fertilizer recipe based on your soil's latest NPK readings and AI diagnostics.</p>
       </header>
 
       <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
         
         <!-- Input Section -->
-        <div class="bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
+        <div class="bg-white p-6 rounded-2xl shadow-sm border border-stone-200 h-fit">
           <h3 class="text-lg font-bold text-stone-700 mb-4 border-b pb-2">1. Configuration</h3>
           
           <!-- Crop Context Alert -->
@@ -32,6 +40,22 @@ import { DataService, Fertilizer } from '../services/data.service';
                 </div>
               </div>
               <button (click)="dataService.selectedCrop.set(null)" class="text-stone-400 hover:text-red-500 transition-colors">✕</button>
+            </div>
+          }
+
+          <!-- AI Deficiencies Alert -->
+          @if (dataService.detectedDeficiencies().length > 0) {
+            <div class="mb-6 bg-red-50 border border-red-200 p-4 rounded-xl">
+               <div class="flex items-center gap-2 mb-2">
+                 <span class="text-xl">🤖</span>
+                 <span class="font-bold text-red-800 text-sm">AI Plant Diagnosis Active</span>
+               </div>
+               <div class="flex flex-wrap gap-2">
+                 @for (def of dataService.detectedDeficiencies(); track def) {
+                   <span class="px-2 py-1 bg-white border border-red-100 rounded text-xs font-bold text-red-600 uppercase">{{ def }}</span>
+                 }
+               </div>
+               <p class="text-xs text-red-700 mt-2">The recipe will be adjusted to treat these specific deficiencies.</p>
             </div>
           }
 
@@ -72,50 +96,65 @@ import { DataService, Fertilizer } from '../services/data.service';
         </div>
 
         <!-- Output Section -->
-        <div class="bg-[#FDFBF5] p-6 rounded-2xl border-2 border-[#A47E3B] relative">
-          <div class="absolute -top-3 left-6 bg-[#A47E3B] text-white text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wider">
-            Recommended Mix
+        <div class="bg-[#FDFBF5] rounded-2xl border-2 border-[#A47E3B] relative overflow-hidden flex flex-col">
+          <div class="bg-[#A47E3B] px-6 py-4 flex justify-between items-center">
+            <h3 class="text-white font-bold text-lg">Custom Fertilizer Mix</h3>
+            <span class="bg-white/20 text-white text-xs font-bold px-2 py-1 rounded">
+               For {{ dataService.selectedCrop() ? dataService.selectedCrop()?.name : 'General Growth' }}
+            </span>
           </div>
 
           @if (recommendation()) {
-            <div class="mt-4">
-              @if (recommendation()?.deficiency === 'None') {
-                 <div class="flex flex-col items-center justify-center py-12 text-center">
-                    <div class="text-4xl mb-3">✅</div>
-                    <h3 class="font-bold text-stone-800 text-lg">Soil Optimal</h3>
-                    <p class="text-stone-500 text-sm mt-2">Current levels are sufficient for {{ dataService.selectedCrop() ? dataService.selectedCrop()?.name : 'general growth' }}.</p>
+            <div class="p-6 flex-1 flex flex-col">
+               
+               <!-- Summary -->
+               <div class="text-center mb-6">
+                 <div class="text-4xl font-bold text-stone-800">{{ targetVolume() }} <span class="text-lg text-stone-500 font-normal">kg/L</span></div>
+                 <div class="text-stone-500 text-sm">Total Output Yield</div>
+               </div>
+
+               <!-- Ingredients List -->
+               <div class="space-y-4">
+                 
+                 <!-- Part 1: Base -->
+                 <div class="bg-white p-4 rounded-xl shadow-sm border-l-4 border-stone-400">
+                    <div class="flex justify-between items-start mb-1">
+                      <h4 class="font-bold text-stone-700">1. Base Medium</h4>
+                      <span class="font-bold text-xl text-stone-600">{{ recommendation()?.base?.amount }} <small class="text-xs">kg/L</small></span>
+                    </div>
+                    <p class="text-stone-600 text-sm">{{ recommendation()?.base?.name }}</p>
+                    <p class="text-xs text-stone-400 mt-1 italic">{{ recommendation()?.base?.reason }}</p>
                  </div>
-              } @else {
-                <div class="flex items-center gap-3 mb-4">
-                  <div class="text-4xl">🧪</div>
-                  <div>
-                    <h3 class="font-bold text-stone-800 text-lg">{{ recommendation()?.primaryFertilizer?.name }} Base</h3>
-                    <p class="text-stone-500 text-sm">Targeting deficiency: <span class="font-bold text-red-500 uppercase">{{ recommendation()?.deficiency }}</span></p>
-                  </div>
-                </div>
 
-                <div class="space-y-3">
-                  <!-- Primary Ingredient -->
-                  <div class="flex justify-between items-center bg-white p-3 rounded-lg shadow-sm">
-                    <span class="font-medium text-stone-700">{{ recommendation()?.primaryFertilizer?.name }}</span>
-                    <span class="font-bold text-[#A47E3B] text-xl">{{ recommendation()?.primaryAmount }} <small class="text-xs text-stone-400">kg/L</small></span>
-                  </div>
+                 <!-- Part 2: Compost -->
+                 <div class="bg-white p-4 rounded-xl shadow-sm border-l-4 border-amber-600">
+                    <div class="flex justify-between items-start mb-1">
+                      <h4 class="font-bold text-stone-700">2. Organic Compost</h4>
+                      <span class="font-bold text-xl text-amber-700">{{ recommendation()?.compost?.amount }} <small class="text-xs">kg/L</small></span>
+                    </div>
+                    <p class="text-stone-600 text-sm">{{ recommendation()?.compost?.name }}</p>
+                    <p class="text-xs text-stone-400 mt-1 italic">{{ recommendation()?.compost?.reason }}</p>
+                 </div>
 
-                  <!-- Filler/Water -->
-                  <div class="flex justify-between items-center bg-white p-3 rounded-lg shadow-sm">
-                    <span class="font-medium text-stone-700">Base Medium (Water/Soil)</span>
-                    <span class="font-bold text-stone-600 text-xl">{{ recommendation()?.baseAmount }} <small class="text-xs text-stone-400">kg/L</small></span>
-                  </div>
-                </div>
-                
-                <div class="mt-6 text-sm text-stone-500 bg-stone-100 p-3 rounded text-center">
-                  Total Output: {{ targetVolume() }} kg/L
-                </div>
-              }
+                 <!-- Part 3: Booster (The "Manufacturing" bit) -->
+                 <div class="bg-white p-4 rounded-xl shadow-sm border-l-4 border-red-500">
+                    <div class="flex justify-between items-start mb-1">
+                       <div class="flex items-center gap-2">
+                         <h4 class="font-bold text-stone-700">3. Target Booster</h4>
+                         <span class="bg-red-100 text-red-600 text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wide">Essential</span>
+                       </div>
+                       <span class="font-bold text-xl text-red-600">{{ recommendation()?.booster?.amount }} <small class="text-xs">kg/L</small></span>
+                    </div>
+                    <p class="text-stone-800 font-bold text-sm">{{ recommendation()?.booster?.name }}</p>
+                    <p class="text-xs text-red-500 mt-1 font-medium">{{ recommendation()?.booster?.reason }}</p>
+                 </div>
+
+               </div>
+
             </div>
           } @else {
-             <div class="h-full flex items-center justify-center text-stone-400 italic">
-               Waiting for soil data...
+             <div class="h-full flex items-center justify-center text-stone-400 italic p-10">
+               Waiting for data to generate recipe...
              </div>
           }
         </div>
@@ -124,15 +163,14 @@ import { DataService, Fertilizer } from '../services/data.service';
 
       <!-- Logic Explanation -->
       <div class="mt-8 bg-white p-6 rounded-xl border border-stone-100">
-        <h4 class="font-bold text-stone-800 mb-2">Calculation Logic</h4>
+        <h4 class="font-bold text-stone-800 mb-2">Why this mix?</h4>
         <p class="text-stone-600 text-sm leading-relaxed">
-          @if (dataService.selectedCrop()) {
-            This calculation compares your soil's current NPK levels against the <strong>specific requirements for {{ dataService.selectedCrop()?.name }}</strong>. 
-            The system identifies the nutrient gap and suggests the best organic amendment to bridge it.
-          } @else {
-            The system analyzes the NPK readings to identify the 'limiting nutrient' based on general agricultural baselines.
-            Select a crop in the Guide tab for more precise targeting.
-          }
+           This formula uses a <strong>{{ recommendation()?.base?.percent }}% Base</strong>, <strong>{{ recommendation()?.compost?.percent }}% Compost</strong>, and <strong>{{ recommendation()?.booster?.percent }}% Booster</strong> ratio.
+           @if (dataService.detectedDeficiencies().length > 0) {
+             The booster was specifically selected to address the <strong>{{ dataService.detectedDeficiencies()[0] }}</strong> detected by the AI analysis.
+           } @else {
+             The booster was selected to bridge the gap between your soil's current NPK levels and the optimal requirements for <strong>{{ dataService.selectedCrop() ? dataService.selectedCrop()?.name : 'general crops' }}</strong>.
+           }
         </p>
       </div>
     </div>
@@ -150,65 +188,120 @@ export class RatioGeneratorComponent {
   }
 
   recommendation = computed(() => {
+    // 1. Gather Inputs
+    const vol = this.targetVolume();
     const readings = this.dataService.npkReadings();
-    if (!readings.timestamp) return null;
-
-    let deficiency = 'Balanced';
-    let targetNutrient = '';
-
     const crop = this.dataService.selectedCrop();
+    const aiDeficiencies = this.dataService.detectedDeficiencies(); // From Plant AI
+    const allAdditives = this.dataService.organicAdditives;
 
-    if (crop) {
-       // Crop specific logic: Calculate deficits
-       const deficitN = crop.idealN - readings.n;
-       const deficitP = crop.idealP - readings.p;
-       const deficitK = crop.idealK - readings.k;
+    // 2. Define Ratios (Manufacturing Recipe)
+    // 50% Base, 30% Compost, 20% Booster
+    const ratioBase = 0.5;
+    const ratioCompost = 0.3;
+    const ratioBooster = 0.2;
 
-       if (deficitN <= 0 && deficitP <= 0 && deficitK <= 0) {
-         return { deficiency: 'None' };
-       }
+    const amountBase = parseFloat((vol * ratioBase).toFixed(2));
+    const amountCompost = parseFloat((vol * ratioCompost).toFixed(2));
+    const amountBooster = parseFloat((vol * ratioBooster).toFixed(2));
 
-       // Find biggest relative deficit
-       // Normalize by ideal to find which is "most" missing percentage-wise
-       const normN = deficitN > 0 ? deficitN / crop.idealN : 0;
-       const normP = deficitP > 0 ? deficitP / crop.idealP : 0;
-       const normK = deficitK > 0 ? deficitK / crop.idealK : 0;
+    // 3. Determine Ingredients
+    
+    // -- A. Base Medium --
+    const baseItem: RecipeItem = {
+      name: 'Garden Soil / Potting Mix',
+      amount: amountBase,
+      reason: 'Provides volume and root support medium.',
+      color: 'stone',
+      percent: ratioBase * 100
+    };
 
-       const maxDeficit = Math.max(normN, normP, normK);
+    // -- B. Organic Compost --
+    // Prefer Vermicompost if available, else Cow Dung
+    const vermi = allAdditives.find(a => a.id === 'vermicompost');
+    const cow = allAdditives.find(a => a.id === 'reset');
+    const compostChoice = vermi || cow || { name: 'Compost' };
+    
+    const compostItem: RecipeItem = {
+      name: compostChoice.name,
+      amount: amountCompost,
+      reason: 'Ensures baseline NPK, microbial activity, and soil structure.',
+      color: 'amber',
+      percent: ratioCompost * 100
+    };
 
-       if (maxDeficit === normN) { deficiency = 'Nitrogen'; targetNutrient = 'n'; }
-       else if (maxDeficit === normP) { deficiency = 'Phosphorus'; targetNutrient = 'p'; }
-       else { deficiency = 'Potassium'; targetNutrient = 'k'; }
+    // -- C. Target Booster (The intelligent part) --
+    let boosterChoice: OrganicAdditive | undefined;
+    let boosterReason = '';
 
-    } else {
-      // General logic
-      // Thresholds: N < 50, P < 20, K < 100
-      const nScore = readings.n / 50;
-      const pScore = readings.p / 20;
-      const kScore = readings.k / 100;
+    // Priority 1: AI Detected Deficiency (Specific Micro/Macro nutrients)
+    if (aiDeficiencies.length > 0) {
+      const def = aiDeficiencies[0].toLowerCase();
+      
+      if (def.includes('magnesium')) boosterChoice = allAdditives.find(a => a.nutrientBoost['Mg']);
+      else if (def.includes('calcium')) boosterChoice = allAdditives.find(a => a.nutrientBoost['Ca']);
+      else if (def.includes('sulphur')) boosterChoice = allAdditives.find(a => a.nutrientBoost['S']);
+      else if (def.includes('nitrogen')) boosterChoice = allAdditives.find(a => a.nutrientBoost['N']);
+      else if (def.includes('phosphorus')) boosterChoice = allAdditives.find(a => a.nutrientBoost['P']);
+      else if (def.includes('potassium')) boosterChoice = allAdditives.find(a => a.nutrientBoost['K']);
 
-      const minScore = Math.min(nScore, pScore, kScore);
-
-      if (minScore === nScore) { deficiency = 'Nitrogen'; targetNutrient = 'n'; }
-      else if (minScore === pScore) { deficiency = 'Phosphorus'; targetNutrient = 'p'; }
-      else { deficiency = 'Potassium'; targetNutrient = 'k'; }
+      if (boosterChoice) {
+        boosterReason = `Targeted fix for AI-detected ${def} deficiency.`;
+      }
     }
 
-    // Select Fertilizer
-    const bestFit = [...this.dataService.fertilizers].sort((a, b) => {
-      return (b as any)[targetNutrient] - (a as any)[targetNutrient];
-    })[0];
+    // Priority 2: Sensor NPK Gaps (if no AI deficiency or mapping failed)
+    if (!boosterChoice && readings.timestamp) {
+       let targetNutrient = 'N';
+       
+       if (crop) {
+         // Calculate gap from Ideal
+         const gapN = (crop.idealN - readings.n) / crop.idealN;
+         const gapP = (crop.idealP - readings.p) / crop.idealP;
+         const gapK = (crop.idealK - readings.k) / crop.idealK;
+         
+         const maxGap = Math.max(gapN, gapP, gapK);
+         if (maxGap === gapN) targetNutrient = 'N';
+         else if (maxGap === gapP) targetNutrient = 'P';
+         else targetNutrient = 'K';
 
-    // Calculate Ratio
-    const vol = this.targetVolume();
-    const primaryAmount = parseFloat((vol * 0.6).toFixed(2));
-    const baseAmount = parseFloat((vol * 0.4).toFixed(2));
+         boosterReason = `Compensates for low ${targetNutrient} levels required by ${crop.name}.`;
+       } else {
+         // General Baseline (50-20-100)
+         const nScore = readings.n / 50;
+         const pScore = readings.p / 20;
+         const kScore = readings.k / 100;
+         
+         const minScore = Math.min(nScore, pScore, kScore);
+         if (minScore === nScore) targetNutrient = 'N';
+         else if (minScore === pScore) targetNutrient = 'P';
+         else targetNutrient = 'K';
+
+         boosterReason = `Boosts ${targetNutrient}, the limiting nutrient in current soil.`;
+       }
+
+       // Find best additive for this nutrient
+       boosterChoice = allAdditives.find(a => a.nutrientBoost[targetNutrient] >= 2);
+    }
+
+    // Fallback if nothing specific needed or found
+    if (!boosterChoice) {
+      boosterChoice = allAdditives.find(a => a.id === 'vermicompost'); // More vermicompost
+      boosterReason = 'General purpose nutrient booster.';
+    }
+
+    const boosterItem: RecipeItem = {
+      name: boosterChoice?.name || 'General Booster',
+      amount: amountBooster,
+      reason: boosterReason,
+      color: 'red',
+      percent: ratioBooster * 100
+    };
 
     return {
-      deficiency,
-      primaryFertilizer: bestFit,
-      primaryAmount,
-      baseAmount
+      base: baseItem,
+      compost: compostItem,
+      booster: boosterItem
     };
   });
 }

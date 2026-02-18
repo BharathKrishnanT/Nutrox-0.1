@@ -241,6 +241,8 @@ export class SoilGuideComponent {
 
   goToCalculator() {
     this.dataService.selectedCrop.set(this.selectedCrop());
+    // Clear any AI findings so they don't pollute the manual crop calculation
+    this.dataService.detectedDeficiencies.set([]);
     this.dataService.currentTab.set('ratio');
   }
 
