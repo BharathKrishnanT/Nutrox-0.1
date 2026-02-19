@@ -53,6 +53,33 @@ export interface OrganicAdditive {
   nutrientBoost: Record<string, number>;
 }
 
+export interface RecommendedProduct {
+  name: string;
+  type: string;
+}
+
+export interface AnalysisResult {
+  cropName: string;
+  condition: string;
+  status: 'Healthy' | 'Attention Required' | 'Critical';
+  confidence: number;
+  symptoms: string[];
+  deficiencies: string[];
+  treatments: {
+    organic: string[];
+    chemical: string[];
+  };
+  recommendedProducts: RecommendedProduct[];
+  prevention: string[];
+}
+
+export interface PlantAnalysisRecord {
+  id: string;
+  timestamp: Date;
+  imageData: string; // Base64
+  result: AnalysisResult;
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -73,6 +100,14 @@ export class DataService {
   lastCommand = signal<string>('');
   
   npkReadings = signal<NpkData>({ n: 0, p: 0, k: 0, timestamp: null });
+  // NPK History Storage
+  npkHistory = signal<NpkData[]>([]);
+  private readonly HISTORY_KEY = 'agrisense_npk_history';
+
+  // Plant Analysis History
+  plantHistory = signal<PlantAnalysisRecord[]>([]);
+  private readonly PLANT_HISTORY_KEY = 'agrisense_plant_history';
+
   tankReadings = signal<TankData>({ methane: 0, temperature: 0, humidity: 0, ph: 7.0 });
 
   // --- Relay & Motor State ---
@@ -248,6 +283,8 @@ export class DataService {
 
   constructor() {
     this.startTankMonitoring();
+    this.loadHistory();
+    this.loadPlantHistory();
     
     // Listen for physical device disconnection
     if (typeof navigator !== 'undefined' && 'serial' in navigator) {
@@ -302,6 +339,102 @@ export class DataService {
           resolve();
         }, 800);
       });
+    }
+  }
+
+  // --- History Management ---
+  
+  private loadHistory() {
+    if (typeof localStorage === 'undefined') return;
+    const stored = localStorage.getItem(this.HISTORY_KEY);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        // Convert string timestamps back to Date objects
+        const history = parsed.map((item: any) => ({
+          ...item,
+          timestamp: item.timestamp ? new Date(item.timestamp) : null
+        }));
+        this.npkHistory.set(history);
+      } catch (e) {
+        console.error('Failed to parse history', e);
+      }
+    }
+  }
+
+  saveNpkToHistory() {
+    const current = this.npkReadings();
+    if (!current.timestamp) return;
+    
+    this.npkHistory.update(history => {
+      const newHistory = [current, ...history];
+      this.persistHistory(newHistory);
+      return newHistory;
+    });
+  }
+
+  deleteHistoryItem(index: number) {
+    this.npkHistory.update(history => {
+      const newHistory = history.filter((_, i) => i !== index);
+      this.persistHistory(newHistory);
+      return newHistory;
+    });
+  }
+
+  clearHistory() {
+    this.npkHistory.set([]);
+    this.persistHistory([]);
+  }
+
+  private persistHistory(data: NpkData[]) {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(this.HISTORY_KEY, JSON.stringify(data));
+  }
+
+  // --- Plant History Management ---
+
+  savePlantAnalysis(record: PlantAnalysisRecord) {
+    this.plantHistory.update(history => {
+      // Keep only last 10 to avoid hitting localStorage limits with base64 images
+      const newHistory = [record, ...history].slice(0, 10);
+      this.persistPlantHistory(newHistory);
+      return newHistory;
+    });
+  }
+
+  deletePlantAnalysis(id: string) {
+    this.plantHistory.update(history => {
+      const newHistory = history.filter(h => h.id !== id);
+      this.persistPlantHistory(newHistory);
+      return newHistory;
+    });
+  }
+
+  private loadPlantHistory() {
+    if (typeof localStorage === 'undefined') return;
+    const stored = localStorage.getItem(this.PLANT_HISTORY_KEY);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        // Hydrate dates
+        const history = parsed.map((item: any) => ({
+          ...item,
+          timestamp: new Date(item.timestamp)
+        }));
+        this.plantHistory.set(history);
+      } catch (e) {
+        console.error('Failed to parse plant history', e);
+      }
+    }
+  }
+
+  private persistPlantHistory(data: PlantAnalysisRecord[]) {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem(this.PLANT_HISTORY_KEY, JSON.stringify(data));
+    } catch (e) {
+      console.error('Storage quota exceeded for plant history', e);
+      alert('Could not save to history: Storage full. Try deleting old records.');
     }
   }
 

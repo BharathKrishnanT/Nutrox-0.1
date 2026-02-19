@@ -1,32 +1,12 @@
-import { Component, signal, inject } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { Component, signal, inject, ElementRef, viewChild } from '@angular/core';
+import { CommonModule, DatePipe } from '@angular/common';
 import { GoogleGenAI, Type } from '@google/genai';
-import { DataService } from '../services/data.service';
-
-interface RecommendedProduct {
-  name: string;
-  type: string;
-}
-
-interface AnalysisResult {
-  cropName: string;
-  condition: string;
-  status: 'Healthy' | 'Attention Required' | 'Critical';
-  confidence: number;
-  symptoms: string[];
-  deficiencies: string[];
-  treatments: {
-    organic: string[];
-    chemical: string[];
-  };
-  recommendedProducts: RecommendedProduct[];
-  prevention: string[];
-}
+import { DataService, AnalysisResult, PlantAnalysisRecord } from '../services/data.service';
 
 @Component({
   selector: 'app-plant-analyser',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, DatePipe],
   template: `
     <div class="max-w-4xl mx-auto pb-12">
       <!-- Header -->
@@ -59,24 +39,45 @@ interface AnalysisResult {
             <h3 class="font-bold text-stone-700 mb-4">1. Capture or Upload</h3>
             
             <div class="relative w-full aspect-square md:aspect-[4/3] rounded-2xl border-2 border-dashed border-stone-300 bg-stone-50 flex flex-col items-center justify-center overflow-hidden transition-colors hover:bg-stone-100 group">
-              @if (imagePreview()) {
+              
+              @if (isCameraActive()) {
+                 <!-- Live Camera Feed -->
+                 <video #videoFeed autoplay playsinline muted class="absolute inset-0 w-full h-full object-cover bg-black"></video>
+                 
+                 <!-- Camera Controls -->
+                 <div class="absolute bottom-6 left-0 right-0 flex justify-center items-center gap-6 z-20">
+                    <button (click)="stopCamera()" class="bg-white/20 hover:bg-white/30 backdrop-blur-md text-white w-12 h-12 rounded-full flex items-center justify-center transition-all" title="Cancel">✕</button>
+                    <button (click)="capturePhoto()" class="bg-white border-4 border-stone-300 w-20 h-20 rounded-full shadow-lg hover:scale-105 active:scale-95 transition-transform"></button>
+                 </div>
+              } 
+              @else if (imagePreview()) {
+                <!-- Image Preview -->
                 <img [src]="imagePreview()" class="absolute inset-0 w-full h-full object-cover" alt="Plant preview">
-                <button (click)="clearImage()" class="absolute top-2 right-2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 backdrop-blur-sm transition-all">
+                <button (click)="clearImage()" class="absolute top-2 right-2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 backdrop-blur-sm transition-all z-20">
                   ✕
                 </button>
-              } @else {
-                <div class="text-center p-6 pointer-events-none">
+              } 
+              @else {
+                <!-- Default State: Upload or Open Camera -->
+                <div class="text-center p-6 pointer-events-none z-10">
                   <div class="text-4xl mb-3 text-stone-300 group-hover:text-[#A47E3B] transition-colors">📸</div>
                   <p class="text-stone-500 font-medium">Click to upload</p>
                   <p class="text-xs text-stone-400 mt-1">Supports JPG, PNG</p>
                 </div>
+                
+                <!-- File Input (Covers area for drag & drop) -->
+                <input type="file" accept="image/*" (change)="handleImage($event)" class="absolute inset-0 opacity-0 cursor-pointer z-10" [disabled]="!!imagePreview()">
+                
+                <!-- Camera Button (Sits on top of input at the bottom) -->
+                <button (click)="startCamera()" class="absolute bottom-4 right-4 bg-stone-800 text-white px-4 py-2 rounded-full text-sm font-bold z-20 shadow-lg hover:bg-stone-700 flex items-center gap-2 transition-transform hover:-translate-y-1">
+                  <span>📷</span> Open Camera
+                </button>
               }
-              <input type="file" accept="image/*" (change)="handleImage($event)" class="absolute inset-0 opacity-0 cursor-pointer" [disabled]="!!imagePreview()">
             </div>
 
             <button 
               (click)="analyzePlant()"
-              [disabled]="!imagePreview() || isLoading()"
+              [disabled]="!imagePreview() || isLoading() || isCameraActive()"
               class="w-full mt-4 bg-[#A47E3B] hover:bg-[#8c6b32] disabled:bg-stone-300 text-white py-4 rounded-xl font-bold text-lg transition-all flex items-center justify-center gap-2">
               @if (isLoading()) {
                 <span class="animate-spin text-2xl">↻</span> Diagnosing...
@@ -252,16 +253,57 @@ interface AnalysisResult {
                 </button>
               </div>
             </div>
-          } @else if (!imagePreview()) {
+          } @else if (!imagePreview() && !isCameraActive()) {
              <div class="h-full min-h-[400px] flex flex-col items-center justify-center text-center p-8 border-2 border-dashed border-stone-200 rounded-3xl bg-stone-50/50">
                <div class="text-6xl mb-4 opacity-20">🌿</div>
                <h3 class="text-xl font-bold text-stone-400 mb-2">Ready to Diagnose</h3>
-               <p class="text-stone-400 max-w-xs">Upload a clear image of the affected leaf or plant to get instant AI advice.</p>
+               <p class="text-stone-400 max-w-xs">Upload or capture a clear image of the affected leaf or plant to get instant AI advice.</p>
              </div>
           }
         </div>
 
       </div>
+
+      <!-- History Section -->
+      @if (dataService.plantHistory().length > 0) {
+        <div class="mt-12 pt-8 border-t border-stone-200">
+           <h3 class="text-2xl font-bold text-[#6A5A4F] mb-6">Previous Diagnoses</h3>
+           
+           <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+             @for (record of dataService.plantHistory(); track record.id) {
+               <div class="bg-white rounded-xl border border-stone-200 shadow-sm overflow-hidden hover:shadow-md transition-shadow group flex flex-col">
+                 <!-- Thumbnail -->
+                 <div class="relative h-32 bg-stone-100">
+                   <img [src]="record.imageData" class="w-full h-full object-cover">
+                   <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                     <button (click)="loadFromHistory(record)" class="bg-white text-xs font-bold px-3 py-1.5 rounded-full hover:bg-stone-100">View</button>
+                     <button (click)="dataService.deletePlantAnalysis(record.id)" class="bg-red-500 text-white text-xs font-bold px-3 py-1.5 rounded-full hover:bg-red-600">Delete</button>
+                   </div>
+                   <div class="absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-bold uppercase shadow-sm"
+                        [class.bg-green-100]="record.result.status === 'Healthy'"
+                        [class.text-green-800]="record.result.status === 'Healthy'"
+                        [class.bg-yellow-100]="record.result.status === 'Attention Required'"
+                        [class.text-yellow-800]="record.result.status === 'Attention Required'"
+                        [class.bg-red-100]="record.result.status === 'Critical'"
+                        [class.text-red-800]="record.result.status === 'Critical'">
+                     {{ record.result.status }}
+                   </div>
+                 </div>
+                 
+                 <div class="p-3 flex-1 flex flex-col justify-between">
+                   <div>
+                     <h4 class="font-bold text-stone-700 text-sm truncate">{{ record.result.cropName }}</h4>
+                     <p class="text-xs text-stone-500 truncate">{{ record.result.condition }}</p>
+                   </div>
+                   <div class="mt-2 text-[10px] text-stone-400 font-medium">
+                     {{ record.timestamp | date:'MMM d, h:mm a' }}
+                   </div>
+                 </div>
+               </div>
+             }
+           </div>
+        </div>
+      }
     </div>
   `
 })
@@ -272,51 +314,110 @@ export class PlantAnalyserComponent {
   error = signal<string | null>(null);
   result = signal<AnalysisResult | null>(null);
 
+  // Camera Logic
+  isCameraActive = signal<boolean>(false);
+  videoRef = viewChild<ElementRef<HTMLVideoElement>>('videoFeed');
+
   handleImage(event: Event) {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files[0]) {
-      const file = input.files[0];
-      const reader = new FileReader();
-      
-      reader.onload = (e) => {
-        // Create an image object
-        const img = new Image();
-        img.onload = () => {
-          // Resize image for faster upload/processing
-          const canvas = document.createElement('canvas');
-          let width = img.width;
-          let height = img.height;
-          const maxSize = 800; // Limit max dimension to 800px
+      this.processFile(input.files[0]);
+    }
+  }
 
-          if (width > height) {
-            if (width > maxSize) {
-              height *= maxSize / width;
-              width = maxSize;
-            }
-          } else {
-            if (height > maxSize) {
-              width *= maxSize / height;
-              height = maxSize;
-            }
-          }
+  processFile(file: File) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => this.resizeAndSetImage(img);
+      img.src = e.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  }
 
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-             ctx.drawImage(img, 0, 0, width, height);
-             // Compress to JPEG 0.7 quality
-             const compressedData = canvas.toDataURL('image/jpeg', 0.7);
-             
-             this.imagePreview.set(compressedData);
-             this.result.set(null);
-             this.error.set(null);
-          }
-        };
-        img.src = e.target?.result as string;
-      };
-      
-      reader.readAsDataURL(file);
+  resizeAndSetImage(img: HTMLImageElement) {
+      const canvas = document.createElement('canvas');
+      let width = img.width;
+      let height = img.height;
+      const maxSize = 800; // Limit max dimension to 800px
+
+      if (width > height) {
+        if (width > maxSize) {
+          height *= maxSize / width;
+          width = maxSize;
+        }
+      } else {
+        if (height > maxSize) {
+          width *= maxSize / height;
+          height = maxSize;
+        }
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+         ctx.drawImage(img, 0, 0, width, height);
+         // Compress to JPEG 0.7 quality
+         const compressedData = canvas.toDataURL('image/jpeg', 0.7);
+         
+         this.imagePreview.set(compressedData);
+         this.result.set(null);
+         this.error.set(null);
+      }
+  }
+
+  async startCamera() {
+    this.error.set(null);
+    this.isCameraActive.set(true);
+    
+    // Wait for DOM update so video element exists
+    setTimeout(async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: { facingMode: 'environment' } 
+        });
+        const video = this.videoRef()?.nativeElement;
+        if (video) {
+           video.srcObject = stream;
+        }
+      } catch (err) {
+        console.error(err);
+        this.error.set('Camera access denied or not supported. Please use Upload.');
+        this.isCameraActive.set(false);
+      }
+    }, 50);
+  }
+
+  stopCamera() {
+    const video = this.videoRef()?.nativeElement;
+    if (video && video.srcObject) {
+      const stream = video.srcObject as MediaStream;
+      stream.getTracks().forEach(track => track.stop());
+      video.srcObject = null;
+    }
+    this.isCameraActive.set(false);
+  }
+
+  capturePhoto() {
+    const video = this.videoRef()?.nativeElement;
+    if (!video) return;
+    
+    // Create image from video frame
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    
+    if (ctx) {
+       ctx.drawImage(video, 0, 0);
+       // Convert to image to reuse the resizing logic
+       const img = new Image();
+       img.onload = () => {
+         this.resizeAndSetImage(img);
+         this.stopCamera();
+       };
+       img.src = canvas.toDataURL('image/jpeg');
     }
   }
 
@@ -324,6 +425,16 @@ export class PlantAnalyserComponent {
     this.imagePreview.set(null);
     this.result.set(null);
     this.error.set(null);
+  }
+  
+  // --- History Action ---
+  loadFromHistory(record: PlantAnalysisRecord) {
+     this.imagePreview.set(record.imageData);
+     this.result.set(record.result);
+     this.error.set(null);
+     
+     // Scroll to top
+     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   async analyzePlant() {
@@ -334,7 +445,7 @@ export class PlantAnalyserComponent {
     this.error.set(null);
 
     try {
-      // 1. Safe Env Access - Directly access process.env.API_KEY as per best practices
+      // 1. Safe Env Access
       const apiKey = process.env.API_KEY;
 
       if (!apiKey) {
@@ -413,8 +524,17 @@ export class PlantAnalyserComponent {
       // 5. Safe Parsing
       const jsonText = response.text;
       if (jsonText) {
-        const data = JSON.parse(jsonText);
+        const data = JSON.parse(jsonText) as AnalysisResult;
         this.result.set(data);
+        
+        // Save to History
+        this.dataService.savePlantAnalysis({
+           id: Date.now().toString(),
+           timestamp: new Date(),
+           imageData: imageData,
+           result: data
+        });
+
       } else {
         throw new Error('No analysis data received from AI.');
       }

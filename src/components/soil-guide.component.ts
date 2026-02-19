@@ -268,23 +268,63 @@ export class SoilGuideComponent {
         datasets: [{
           label: `${soil.name} Levels`,
           data: Object.values(soil.profile),
-          backgroundColor: 'rgba(164, 126, 59, 0.2)',
-          borderColor: 'rgba(164, 126, 59, 1)',
-          borderWidth: 2,
-          pointBackgroundColor: 'rgba(164, 126, 59, 1)',
+          backgroundColor: 'rgba(164, 126, 59, 0.25)', // Earthy transparency
+          borderColor: '#A47E3B', // Brand Color
+          borderWidth: 3,
+          pointBackgroundColor: '#A47E3B',
+          pointBorderColor: '#fff',
+          pointHoverBackgroundColor: '#fff',
+          pointHoverBorderColor: '#A47E3B',
+          pointRadius: 5,
+          pointHoverRadius: 7,
+          fill: true
         }]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
+        plugins: { 
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: 'rgba(79, 74, 69, 0.9)', // Dark stone
+            titleFont: { size: 13, family: 'Inter' },
+            bodyFont: { size: 14, weight: 'bold', family: 'Inter' },
+            padding: 12,
+            cornerRadius: 8,
+            callbacks: {
+              label: (ctx: any) => {
+                const val = ctx.raw;
+                // Translate numeric level to descriptive text
+                let desc = '';
+                if (val >= 3) desc = 'High / Rich';
+                else if (val >= 2) desc = 'Moderate';
+                else desc = 'Low / Deficient';
+                return `${desc} (${val}/3)`;
+              }
+            }
+          }
+        },
         scales: {
           r: {
-            angleLines: { color: '#E5E7EB' },
-            grid: { color: '#E5E7EB' },
-            pointLabels: { font: { size: 12 }, color: '#4F4A45' },
-            ticks: { display: false, stepSize: 1, max: 3, min: 0 }
+            angleLines: { color: 'rgba(164, 126, 59, 0.1)' },
+            grid: { color: 'rgba(164, 126, 59, 0.1)' },
+            pointLabels: { 
+              font: { size: 12, weight: 'bold', family: 'Inter' }, 
+              color: '#6A5A4F',
+              padding: 10
+            },
+            ticks: { 
+              display: false, 
+              stepSize: 1, 
+              max: 3, 
+              min: 0 
+            },
+            beginAtZero: true
           }
+        },
+        animation: {
+          duration: 1000,
+          easing: 'easeOutQuart'
         }
       }
     });
@@ -304,7 +344,7 @@ export class SoilGuideComponent {
           label: 'Relative Requirement',
           data: Object.values(crop.needs),
           backgroundColor: ['#A47E3B', '#C8A572', '#E5D3B3'],
-          borderRadius: 5
+          borderRadius: 6
         }]
       },
       options: {
@@ -314,7 +354,7 @@ export class SoilGuideComponent {
         plugins: { legend: { display: false } },
         scales: {
           x: { grid: { display: false }, ticks: { display: false, max: 3, min: 0 } },
-          y: { grid: { display: false }, ticks: { color: '#4F4A45', font: { size: 14 } } }
+          y: { grid: { display: false }, ticks: { color: '#4F4A45', font: { size: 13, weight: 'bold', family: 'Inter' } } }
         }
       }
     });
@@ -339,10 +379,16 @@ export class SoilGuideComponent {
         datasets: [{
           label: 'Nutrient Profile',
           data: Object.values(finalNutrients),
-          backgroundColor: 'rgba(164, 126, 59, 0.2)',
-          borderColor: 'rgba(164, 126, 59, 1)',
-          borderWidth: 2,
-          pointBackgroundColor: 'rgba(164, 126, 59, 1)',
+          backgroundColor: 'rgba(164, 126, 59, 0.25)',
+          borderColor: '#A47E3B',
+          borderWidth: 3,
+          pointBackgroundColor: '#A47E3B',
+          pointBorderColor: '#fff',
+          pointHoverBackgroundColor: '#fff',
+          pointHoverBorderColor: '#A47E3B',
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          fill: true
         }]
       },
       options: {
@@ -351,9 +397,9 @@ export class SoilGuideComponent {
         plugins: { legend: { display: false } },
         scales: {
           r: {
-            angleLines: { color: '#E5E7EB' },
-            grid: { color: '#E5E7EB' },
-            pointLabels: { font: { size: 12 }, color: '#4F4A45' },
+            angleLines: { color: 'rgba(164, 126, 59, 0.1)' },
+            grid: { color: 'rgba(164, 126, 59, 0.1)' },
+            pointLabels: { font: { size: 11, weight: 'bold', family: 'Inter' }, color: '#6A5A4F' },
             ticks: { display: false, stepSize: 1, max: 4, min: 0 }
           }
         }
